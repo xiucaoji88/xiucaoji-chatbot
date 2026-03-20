@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 修草纪智能客服系统 - Flask Web 服务
-用于 Railway 部署，对接微信公众号
+支持微信公众号 + 企业微信，具备图片识别功能
+用于 Railway 部署
 """
 
 import os
@@ -10,6 +11,7 @@ import json
 import hashlib
 import time
 import requests
+import base64
 from flask import Flask, request, make_response
 from xml.etree import ElementTree as ET
 
@@ -20,15 +22,28 @@ app = Flask(__name__)
 WECHAT_CONFIG = {
     "appid": os.environ.get("WECHAT_APPID", "wx62ff6236f2c99902"),
     "appsecret": os.environ.get("WECHAT_APPSECRET", ""),
-    "token": os.environ.get("WECHAT_TOKEN", "xiucaoji88")  # 用于服务器验证
+    "token": os.environ.get("WECHAT_TOKEN", "xiucaoji88")
+}
+
+# 企业微信配置（代理专用）
+WORKWECHAT_CONFIG = {
+    "corpid": os.environ.get("WORKWECHAT_CORPID", ""),
+    "agentid": os.environ.get("WORKWECHAT_AGENTID", ""),
+    "secret": os.environ.get("WORKWECHAT_SECRET", ""),
+    "token": os.environ.get("WORKWECHAT_TOKEN", ""),
+    "encoding_aes_key": os.environ.get("WORKWECHAT_ENCODING_AES_KEY", "")
 }
 
 # OpenAI 配置
 OPENAI_CONFIG = {
     "api_key": os.environ.get("OPENAI_API_KEY", ""),
     "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-    "model": os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo")
+    "model": os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo"),
+    "vision_model": os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
 }
+
+# 用户会话状态存储（简单内存存储，生产环境建议用 Redis）
+user_sessions = {}
 
 # ==================== 微信相关功能 ====================
 
@@ -60,10 +75,21 @@ def create_xml_response(to_user, from_user, content):
 </xml>"""
     return xml
 
-# ==================== OpenAI 对接 ====================
+# ==================== 图片处理功能 ====================
 
-def call_openai(user_message, user_id="default"):
-    """调用 OpenAI API 获取回复"""
+def download_image(url):
+    """下载微信图片"""
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return base64.b64encode(response.content).decode('utf-8')
+        return None
+    except Exception as e:
+        print(f"下载图片失败: {e}")
+        return None
+
+def analyze_image_with_gpt(image_base64, user_message=""):
+    """使用 GPT-4 Vision 分析图片"""
     url = f"{OPENAI_CONFIG['base_url']}/chat/completions"
     
     headers = {
@@ -71,8 +97,74 @@ def call_openai(user_message, user_id="default"):
         "Content-Type": "application/json"
     }
     
-    # 系统提示词 - 修草纪问题肌管理顾问
-    system_prompt = """你是修草纪问题肌管理顾问，有10年经验，帮助大量问题肌用户恢复状态。
+    # 图片分析提示词
+    analysis_prompt = """你是一位专业的问题肌管理顾问，擅长通过照片分析皮肤问题。
+
+请分析用户发送的面部照片，判断：
+1. 问题类型：痘痘/闭口/敏感/斑点/其他
+2. 严重程度：轻度/中度/重度
+3. 主要分布区域
+4. 可能的成因（油脂失衡/屏障受损/作息/饮食等）
+
+回复格式：
+- 从照片来看，你的皮肤主要是[问题类型]，程度属于[轻度/中度/重度]
+- 问题主要集中在[部位]
+- 初步判断可能是[成因]导致的
+- 建议先了解几个问题：这个问题持续多久了？平时作息和饮食怎么样？
+
+注意：
+- 语气要像朋友一样，真诚不装专家
+- 控制在100字以内
+- 不要直接给方案，先问诊
+- 如果照片不清晰无法判断，要说明"照片看不太清楚，能发一张更清晰的吗"
+"""
+    
+    payload = {
+        "model": OPENAI_CONFIG['vision_model'],
+        "messages": [
+            {
+                "role": "system",
+                "content": analysis_prompt
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": user_message or "请分析这张面部照片的皮肤问题"
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_base64}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 200
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        result = response.json()
+        
+        if "choices" in result and len(result["choices"]) > 0:
+            return result["choices"][0]["message"]["content"]
+        else:
+            print(f"图片分析 API 返回错误: {result}")
+            return "照片收到了，不过看不太清楚细节，能发一张光线更好、更清晰的吗？这样我能更准确地帮你分析。"
+    except Exception as e:
+        print(f"图片分析失败: {e}")
+        return "照片收到了，让我先看看，同时你能说说这个问题持续多久了吗？"
+
+# ==================== OpenAI 对话功能 ====================
+
+def get_system_prompt(is_agent=False):
+    """获取系统提示词
+    is_agent: 是否为企业微信代理模式
+    """
+    base_prompt = """你是修草纪问题肌管理顾问，有10年经验，帮助大量问题肌用户恢复状态。
 
 你的目标：
 完成前端接待、问诊、判断、方案引导和基础成交，让用户在被理解的情况下自然接受方案。
@@ -589,21 +681,91 @@ def call_openai(user_message, user_id="default"):
     - "太好了，看到效果满意我很高兴！"
     - "如需要下一阶段组合建议，可联系人工规划"
   - AI不做复杂分析，一旦触发立即转人工"""
+
+    if is_agent:
+        # 代理模式添加额外说明
+        agent_addon = """
+
+【代理专用模式】
+你是修草纪官方代理助手，专门帮助代理了解：
+- 产品知识和卖点
+- 代理政策和升级路径
+- 客户常见问题解答
+- 销售话术和技巧
+
+代理政策：
+- 银卡会员：7折优惠，累计消费3000元或充值5000元
+- 金卡会员：6折优惠，累计消费5000元或充值8000元
+- 官方代理：5折优惠，累计消费8000元或充值10000元
+- 分销合作：0元轻分销，佣金18%-30%
+
+代理支持：
+- 提供完整产品资料
+- 一对一培训指导
+- 客户资源分配（达到一定级别）
+- 专属代理群交流
+
+回复风格：
+- 专业、热情、有能量
+- 帮助代理建立信心
+- 提供实际可操作的方案
+"""
+        base_prompt += agent_addon
+    
+    return base_prompt
+
+def call_openai(user_message, user_id="default", is_agent=False, image_base64=None):
+    """调用 OpenAI API 获取回复"""
+    url = f"{OPENAI_CONFIG['base_url']}/chat/completions"
+    
+    headers = {
+        "Authorization": f"Bearer {OPENAI_CONFIG['api_key']}",
+        "Content-Type": "application/json"
+    }
+    
+    # 获取系统提示词
+    system_prompt = get_system_prompt(is_agent)
+    
+    # 构建消息
+    messages = [
+        {
+            "role": "system",
+            "content": system_prompt
+        }
+    ]
+    
+    # 如果有图片，使用 vision 模型
+    if image_base64:
+        messages.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": user_message
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_base64}"
+                    }
+                }
+            ]
+        })
+        model = OPENAI_CONFIG['vision_model']
+        max_tokens = 200
+    else:
+        messages.append({
+            "role": "user",
+            "content": user_message
+        })
+        model = OPENAI_CONFIG['model']
+        max_tokens = 150
     
     payload = {
-        "model": OPENAI_CONFIG['model'],
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_message
-            }
-        ],
+        "model": model,
+        "messages": messages,
         "temperature": 0.7,
-        "max_tokens": 150
+        "max_tokens": max_tokens
     }
     
     try:
@@ -627,13 +789,16 @@ def index():
     return {
         "status": "ok",
         "service": "修草纪智能客服系统",
-        "version": "1.0.0"
+        "version": "2.0.0",
+        "features": ["微信公众号", "企业微信", "图片识别"]
     }
 
 @app.route('/health')
 def health():
     """健康检查端点"""
     return {"status": "healthy"}
+
+# ==================== 微信公众号接口 ====================
 
 @app.route('/wechat', methods=['GET', 'POST'])
 def wechat_handler():
@@ -667,7 +832,7 @@ def wechat_handler():
                 user_message = msg.get('Content', '')
                 
                 # 调用 OpenAI 获取回复
-                reply_content = call_openai(user_message, from_user)
+                reply_content = call_openai(user_message, from_user, is_agent=False)
                 
                 # 返回 XML 回复
                 response_xml = create_xml_response(from_user, to_user, reply_content)
@@ -677,7 +842,22 @@ def wechat_handler():
             
             # 处理图片消息（肌肤诊断）
             elif msg_type == 'image':
-                reply = "收到照片了，我先看看你的皮肤情况。能简单说说这个问题持续多久了？主要在哪些部位？平时作息和饮食习惯怎么样？比如喝牛奶、吃牛肉多吗？"
+                # 获取图片 URL
+                pic_url = msg.get('PicUrl', '')
+                
+                if pic_url:
+                    # 下载图片
+                    image_base64 = download_image(pic_url)
+                    
+                    if image_base64:
+                        # 使用 GPT Vision 分析图片
+                        analysis_result = analyze_image_with_gpt(image_base64)
+                        reply = analysis_result
+                    else:
+                        reply = "照片收到了，不过下载有点问题，能重新发一张吗？同时说说你的皮肤困扰？"
+                else:
+                    reply = "收到照片了，让我先看看，同时你能说说这个问题持续多久了吗？"
+                
                 response_xml = create_xml_response(from_user, to_user, reply)
                 response = make_response(response_xml)
                 response.content_type = 'application/xml'
@@ -705,18 +885,109 @@ def wechat_handler():
             print(f"消息处理错误: {e}")
             return 'success'  # 微信要求必须返回 success
 
+# ==================== 企业微信接口（代理专用）====================
+
+@app.route('/workwechat', methods=['GET', 'POST'])
+def workwechat_handler():
+    """企业微信消息处理入口（代理专用）"""
+    
+    # GET 请求 - 服务器验证
+    if request.method == 'GET':
+        signature = request.args.get('msg_signature', '')
+        timestamp = request.args.get('timestamp', '')
+        nonce = request.args.get('nonce', '')
+        echostr = request.args.get('echostr', '')
+        
+        # 企业微信验证逻辑（简化版，实际需要解密）
+        if verify_signature(WORKWECHAT_CONFIG['token'], signature, timestamp, nonce):
+            return echostr
+        else:
+            return '验证失败', 403
+    
+    # POST 请求 - 接收用户消息
+    elif request.method == 'POST':
+        try:
+            xml_data = request.data
+            msg = parse_xml(xml_data)
+            
+            # 获取消息信息
+            msg_type = msg.get('MsgType', '')
+            from_user = msg.get('FromUserName', '')
+            to_user = msg.get('ToUserName', '')
+            
+            # 处理文本消息
+            if msg_type == 'text':
+                user_message = msg.get('Content', '')
+                
+                # 调用 OpenAI 获取回复（代理模式）
+                reply_content = call_openai(user_message, from_user, is_agent=True)
+                
+                # 返回 XML 回复
+                response_xml = create_xml_response(from_user, to_user, reply_content)
+                response = make_response(response_xml)
+                response.content_type = 'application/xml'
+                return response
+            
+            # 处理图片消息
+            elif msg_type == 'image':
+                pic_url = msg.get('PicUrl', '')
+                
+                if pic_url:
+                    image_base64 = download_image(pic_url)
+                    
+                    if image_base64:
+                        analysis_result = analyze_image_with_gpt(image_base64)
+                        reply = analysis_result
+                    else:
+                        reply = "照片收到了，不过下载有点问题，能重新发一张吗？"
+                else:
+                    reply = "收到照片了，让我先看看。"
+                
+                response_xml = create_xml_response(from_user, to_user, reply)
+                response = make_response(response_xml)
+                response.content_type = 'application/xml'
+                return response
+            
+            # 其他消息类型
+            else:
+                reply = "你好！我是修草纪代理助手，专门帮助代理了解产品知识、代理政策和销售技巧。有什么可以帮你的吗？"
+                response_xml = create_xml_response(from_user, to_user, reply)
+                response = make_response(response_xml)
+                response.content_type = 'application/xml'
+                return response
+                
+        except Exception as e:
+            print(f"企业微信消息处理错误: {e}")
+            return 'success'
+
+# ==================== API 接口 ====================
+
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
     """API 接口 - 直接对话"""
     data = request.json
     user_message = data.get('message', '')
     user_id = data.get('user_id', 'api_user')
+    is_agent = data.get('is_agent', False)
     
     if not user_message:
         return {"error": "消息不能为空"}, 400
     
-    reply = call_openai(user_message, user_id)
+    reply = call_openai(user_message, user_id, is_agent=is_agent)
     return {"reply": reply}
+
+@app.route('/api/analyze-image', methods=['POST'])
+def api_analyze_image():
+    """API 接口 - 图片分析"""
+    data = request.json
+    image_base64 = data.get('image', '')
+    user_message = data.get('message', '请分析这张面部照片的皮肤问题')
+    
+    if not image_base64:
+        return {"error": "图片数据不能为空"}, 400
+    
+    result = analyze_image_with_gpt(image_base64, user_message)
+    return {"analysis": result}
 
 # ==================== 主程序 ====================
 
