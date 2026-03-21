@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>修草纪智能客服</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: #f5f5f5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #4A7C59 0%, #2D5A3D 100%);
+            color: white;
+            padding: 15px 20px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 18px;
+            font-weight: 500;
+        }
+        
+        .header p {
+            font-size: 12px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            padding-bottom: 80px;
+        }
+        
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: flex-start;
+        }
+        
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        
+        .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            margin: 0 10px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+        
+        .message.ai .avatar {
+            background: linear-gradient(135deg, #4A7C59 0%, #2D5A3D 100%);
+            color: white;
+        }
+        
+        .message.user .avatar {
+            background: #e0e0e0;
+            color: #666;
+        }
+        
+        .bubble {
+            max-width: 70%;
+            padding: 12px 15px;
+            border-radius: 18px;
+            font-size: 14px;
+            line-height: 1.6;
+            word-wrap: break-word;
+        }
+        
+        .message.ai .bubble {
+            background: white;
+            color: #333;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .message.user .bubble {
+            background: linear-gradient(135deg, #4A7C59 0%, #2D5A3D 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .input-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            padding: 10px 15px;
+            padding-bottom: calc(10px + env(safe-area-inset-bottom));
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .input-wrapper {
+            flex: 1;
+            background: #f5f5f5;
+            border-radius: 20px;
+            padding: 8px 15px;
+            display: flex;
+            align-items: center;
+        }
+        
+        #messageInput {
+            flex: 1;
+            border: none;
+            background: transparent;
+            font-size: 14px;
+            outline: none;
+            resize: none;
+            max-height: 80px;
+            line-height: 1.4;
+        }
+        
+        .send-btn {
+            background: linear-gradient(135deg, #4A7C59 0%, #2D5A3D 100%);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .send-btn:active {
+            opacity: 0.8;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #4A7C59;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .welcome-message {
+            text-align: center;
+            color: #999;
+            font-size: 12px;
+            margin: 20px 0;
+        }
+        
+        .quick-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+            padding: 0 10px;
+        }
+        
+        .quick-btn {
+            background: white;
+            border: 1px solid #4A7C59;
+            color: #4A7C59;
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .quick-btn:hover {
+            background: #4A7C59;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>修草纪智能客服</h1>
+        <p>有10年经验的问题肌管理顾问</p>
+    </div>
+    
+    <div class="chat-container" id="chatContainer">
+        <div class="welcome-message">—— 今天 ——</div>
+    </div>
+    
+    <div class="quick-buttons">
+        <button class="quick-btn" onclick="sendQuickMessage('我想祛痘')">我想祛痘</button>
+        <button class="quick-btn" onclick="sendQuickMessage('敏感肌怎么护理')">敏感肌</button>
+        <button class="quick-btn" onclick="sendQuickMessage('有什么产品推荐')">产品推荐</button>
+        <button class="quick-btn" onclick="sendQuickMessage('怎么买')">怎么买</button>
+    </div>
+    
+    <div class="input-container">
+        <div class="input-wrapper">
+            <textarea id="messageInput" placeholder="请输入您的问题..." rows="1"></textarea>
+        </div>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        let userId = 'user_' + Date.now();
+        
+        // 获取 URL 参数
+        const urlParams = new URLSearchParams(window.location.search);
+        const source = urlParams.get('source') || 'web';
+        
+        // 页面加载时发送欢迎消息
+        window.onload = function() {
+            addMessage('ai', '你好呀，欢迎来到修草纪！我是你的护肤顾问，有10年问题肌调理经验。不推销、不套路，就是想帮你把皮肤调好。你可以发张面部照片让我看看情况，或者说说你现在的皮肤困扰？');
+        };
+        
+        // 添加消息到聊天窗口
+        function addMessage(type, content) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = type === 'ai' ? '顾问' : '我';
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            bubble.textContent = content;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(bubble);
+            chatContainer.appendChild(messageDiv);
+            
+            // 滚动到底部
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        
+        // 发送消息
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+            
+            // 添加用户消息
+            addMessage('user', message);
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+            
+            // 显示加载状态
+            sendBtn.disabled = true;
+            sendBtn.textContent = '...';
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        user_id: userId,
+                        is_agent: source === 'agent'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.reply) {
+                    addMessage('ai', data.reply);
+                } else {
+                    addMessage('ai', '抱歉，我暂时无法回答这个问题，请稍后再试。');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage('ai', '网络连接失败，请检查网络后重试。');
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = '发送';
+            }
+        }
+        
+        // 快速发送预设消息
+        function sendQuickMessage(message) {
+            messageInput.value = message;
+            sendMessage();
+        }
+        
+        // 输入框回车发送
+        messageInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        
+        // 输入框自动调整高度
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 80) + 'px';
+        });
+    </script>
+</body>
+</html>

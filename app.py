@@ -12,10 +12,10 @@ import hashlib
 import time
 import requests
 import base64
-from flask import Flask, request, make_response
+from flask import Flask, request, make_response, render_template
 from xml.etree import ElementTree as ET
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates')
 
 # ==================== 配置信息 ====================
 # 微信公众号配置
@@ -39,7 +39,7 @@ OPENAI_CONFIG = {
     "api_key": os.environ.get("OPENAI_API_KEY", ""),
     "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
     "model": os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo"),
-    "vision_model": os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
+    "vision_model": os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")
 }
 
 # 用户会话状态存储（简单内存存储，生产环境建议用 Redis）
@@ -797,6 +797,12 @@ def index():
 def health():
     """健康检查端点"""
     return {"status": "healthy"}
+
+@app.route('/chat')
+def chat_page():
+    """聊天页面 - 用于微店客服跳转"""
+    source = request.args.get('source', 'web')
+    return render_template('chat.html', source=source)
 
 # ==================== 微信公众号接口 ====================
 
