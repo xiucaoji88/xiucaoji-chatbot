@@ -38,7 +38,7 @@ WORKWECHAT_CONFIG = {
 OPENAI_CONFIG = {
     "api_key": os.environ.get("OPENAI_API_KEY", ""),
     "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-    "model": os.environ.get("OPENAI_MODEL", "gpt-3.5-turbo"),
+    "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
     "vision_model": os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")
 }
 
@@ -759,13 +759,16 @@ def call_openai(user_message, user_id="default", is_agent=False, image_base64=No
             "content": user_message
         })
         model = OPENAI_CONFIG['model']
-        max_tokens = 150
+        max_tokens = 250
     
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": max_tokens
+        "temperature": 0.5,
+        "max_tokens": max_tokens,
+        "top_p": 0.9,
+        "frequency_penalty": 0.2,
+        "presence_penalty": 0.1
     }
     
     try:
